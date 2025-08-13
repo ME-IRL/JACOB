@@ -1,0 +1,12 @@
+[project]
+name = "lc"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "geopy>=2.4.1",
+    "langchain-openai>=0.3.29",
+    "signalbot>=0.17.0",
+    "tzwhere>=3.0.3",
+]
