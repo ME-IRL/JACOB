@@ -1,101 +1,74 @@
 import os
-from typing import List
+import pickle
 
-from langchain_core.messages import HumanMessage, BaseMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
-from datetime import datetime
-
+from langchain_core.messages import SystemMessage
 from signalbot import Command, Context, SignalBot
 
-from tools import get_time
+from assistant import get_time, MultiAssistant
 
 API_KEY = os.environ.get("OPENAI_API_KEY", "")
 API_URL = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
-
 SIGNAL_SRV = os.environ.get("SIGNAL_SERVICE", "")
 SIGNAL_NUM = os.environ.get("PHONE_NUMBER", "")
 
-SYSTEM_PROMPT = "You are a Signal bot named J.A.C.O.B. , short for \"Just Another Cool Online Bot\". Limit your replies to fewer than 500 words. Be flirty."
-
-class GetTime(BaseModel):
-    """Get the current time."""
-
-    timezone: str = Field(..., description="The timezone")
-
-    def run(self) -> str:
-        return datetime.now()
-
-
-class Assistant:
-    message: List[BaseMessage]
-    tools: List[BaseTool]
-
-    def __init__(self, base_url: str | None = None, api_key: str | None = None, system: str | None = None):
-        self.message = []
-        if system is not None:
-            self.message.append(SystemMessage(system))
-
-        self.llm = ChatOpenAI(base_url=base_url, api_key=api_key)
-        self.tools = []
-
-    def add_tool(self, new_tool) -> None:
-        self.tools.append(new_tool)
-        self.llm = self.llm.bind_tools(self.tools)
-
-    def chat(self, msg: str):
-        self.message.append(HumanMessage(msg))
-        resp = self.llm.invoke(self.message)
-        self.message.append(resp)
-
-        while resp.response_metadata["finish_reason"] != "stop":
-            if resp.tool_calls:
-                self.message[-1].content = " "  # Server errors when content is empty. (See prompt template)
-                for tool in resp.tool_calls:
-                    for rtool in self.tools:
-                        if rtool.name == tool["name"]:
-                            self.message.append(rtool.invoke(tool))
-
-            resp = self.llm.invoke(self.message)
-            self.message.append(resp)
-
-        return resp.content
-
-    def chat_print(self, msg: str):
-        print(f"User: {msg}")
-        print(f"Assistant: {self.chat(msg)}")
-
-
-ai = Assistant(API_URL, API_KEY, SYSTEM_PROMPT)
-ai.add_tool(get_time)
-# ai.chat_print("What time is it right now?")
-
+SYSTEM_PROMPT = "You are a Signal chat bot named J.A.C.O.B. , short for \"Just Another Cool Online Bot\". Use only as many words needed, but fewer than 800 words."
 
 class AICommand(Command):
-    def __init__(self, ai: Assistant):
+
+    def __init__(self, ai: MultiAssistant, prompt: str):
         super().__init__()
         self.ai = ai
+        self.prompt = prompt
+        self.history = {}
 
     async def handle(self, c: Context):
-        command = c.message.text
+        msg = c.message.text
+        id = c.message.source_uuid
+
+        # pprint(vars(c.message))
+
+        # Group message
+        if c.message.group:
+            return
+        # if c.message.group and c.message.text:
 
         await c.start_typing()
-        resp = self.ai.chat(command)
+
+        if id not in self.history:
+            self.history[id] = [SystemMessage(SYSTEM_PROMPT)]
+        resp = self.ai.chat(msg, self.history[id])
         await c.stop_typing()
         await c.send(resp)
 
-        # if command == "ping":
-        #     await c.send("pong")
-        #     return
+    def load(self):
+        with open("history.pkl", "wb") as f:
+            self.history = pickle.load(f)
 
-bot = SignalBot({
-    "signal_service": SIGNAL_SRV,
-    "phone_number": SIGNAL_NUM,
-    "storage": {
-        "type": "sqlite",
-        "sqlite_db": "signal.db"
-    }
-})
-bot.register(AICommand(ai))
-bot.start()
+    def save(self):
+        with open("history.pkl", "wb") as f:
+            pickle.dump(self.history, f)
+
+
+def main():
+    ai = MultiAssistant(API_URL, API_KEY)
+    ai.add_tool(get_time)
+
+    bot = SignalBot({
+        "signal_service": SIGNAL_SRV,
+        "phone_number": SIGNAL_NUM,
+        "storage": {
+            "type": "sqlite",
+            "sqlite_db": "signal.db"
+        }
+    })
+
+    aicommand = AICommand(ai, SYSTEM_PROMPT)
+    aicommand.load()
+
+    bot.register(aicommand)
+    bot.start()
+    bot.scheduler.start()
+    aicommand.save()
+
+if __name__ == "__main__":
+    main()
