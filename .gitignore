@@ -9,6 +9,40 @@ wheels/
 # Virtual environments
 .venv
 
+# IDE files
 .idea
+.vscode
+*.swp
+*.swo
+
+# Database files
 *.db
 *.pkl
+
+# Log files
+*.log
+
+# Environment variables
+.env
+
+# Test coverage
+.htmlcov/
+.coverage
+.cache
+
+# Pyright cache
+.pytest_cache/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# Docker
+docker-compose.override.yml
+*.dockerlocal
+
+# PyCharm
+.idea/
+*.iws
+
+# VSCode
+.vscode/

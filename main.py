@@ -1,84 +1,134 @@
-import os
+import logging
 import pickle
+from typing import Dict
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import BaseMessage, SystemMessage
 from signalbot import Command, Context, SignalBot
 
-from assistant import get_time, MultiAssistant
+from assistant import MultiAssistant, get_time
+from config import get_settings
 
-API_KEY = os.environ.get("OPENAI_API_KEY", "")
-API_URL = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
-SIGNAL_SRV = os.environ.get("SIGNAL_SERVICE", "")
-SIGNAL_NUM = os.environ.get("PHONE_NUMBER", "")
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)24s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("jacob.log"), logging.StreamHandler()],
+)
+logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = "You are a Signal chat bot named J.A.C.O.B. , short for \"Just Another Cool Online Bot\". Use only as many words needed, but fewer than 800 words."
+# Load configuration
+settings = get_settings()
+
 
 class AICommand(Command):
+    """Command handler for AI-powered Signal bot responses."""
 
     def __init__(self, ai: MultiAssistant, prompt: str):
+        """Initialize the AI command handler.
+
+        Args:
+            ai: MultiAssistant instance for handling AI interactions
+            prompt: System prompt for the AI
+        """
         super().__init__()
         self.ai = ai
         self.prompt = prompt
-        self.history = {}
+        self.history: Dict[str, list[BaseMessage]] = {}
 
-    async def handle(self, c: Context):
-        msg = c.message.text
-        id = c.message.source_uuid
+    async def handle(self, c: Context) -> None:
+        """Handle incoming Signal messages.
 
-        # pprint(vars(c.message))
+        Args:
+            c: Signal context containing message information
+        """
+        try:
+            msg = c.message.text
+            id = c.message.source_uuid
 
-        # Group message
-        if c.message.group:
-            return
-        # if c.message.group and c.message.text:
+            # Skip group messages
+            if c.message.group:
+                logger.debug(f"Skipping group message from {id}")
+                return
 
-        await c.start_typing()
+            logger.info(f"Received message from {id}: {msg}")
 
-        if id not in self.history:
-            self.history[id] = [SystemMessage(SYSTEM_PROMPT)]
-        resp = self.ai.chat(msg, self.history[id])
-        await c.stop_typing()
-        await c.send(resp)
+            await c.start_typing()
 
-    def load(self):
+            # Initialize conversation history if not exists
+            if id not in self.history:
+                self.history[id] = [SystemMessage(self.prompt)]
+
+            # Get AI response
+            resp = self.ai.chat(msg, self.history[id])
+            await c.stop_typing()
+
+            # Send response and log
+            await c.send(resp)
+            logger.info(f"Sent response to {id}")
+
+        except Exception as e:
+            logger.error(f"Error handling message from {id}: {e}", exc_info=True)
+            await c.send("I'm sorry, I encountered an error processing your request.")
+
+    def load(self) -> None:
+        """Load conversation history from persistent storage."""
         try:
             with open("history.pkl", "rb") as f:
                 self.history = pickle.load(f)
+            logger.info("Loaded conversation history")
         except FileNotFoundError:
-            print("File does not exist")
+            logger.warning("History file not found, starting with empty history")
+        except Exception as e:
+            logger.error(f"Error loading history: {e}", exc_info=True)
 
-    def save(self):
-        with open("history.pkl", "wb") as f:
-            pickle.dump(self.history, f)
+    def save(self) -> None:
+        """Save conversation history to persistent storage."""
+        try:
+            with open("history.pkl", "wb") as f:
+                pickle.dump(self.history, f)
+            logger.info("Saved conversation history")
+        except Exception as e:
+            logger.error(f"Error saving history: {e}", exc_info=True)
 
 
-def main():
-    ai = MultiAssistant(API_URL, API_KEY)
-    ai.add_tool(get_time)
-
-    bot = SignalBot({
-        "signal_service": SIGNAL_SRV,
-        "phone_number": SIGNAL_NUM,
-        "storage": {
-            "type": "sqlite",
-            "sqlite_db": "signal.db"
-        }
-    })
-
-    aicommand = AICommand(ai, SYSTEM_PROMPT)
-    aicommand.load()
-
-    bot.register(aicommand)
-
+def main() -> None:
+    """Main entry point for the Signal bot application."""
     try:
+        # Initialize AI assistant
+        logger.info("Initializing AI assistant...")
+        ai = MultiAssistant(settings.OPENAI_API_BASE, settings.OPENAI_API_KEY)
+        ai.add_tool(get_time)
+
+        # Initialize Signal bot
+        logger.info("Initializing Signal bot...")
+        bot = SignalBot(
+            {
+                "signal_service": settings.SIGNAL_SERVICE,
+                "phone_number": settings.PHONE_NUMBER,
+                "storage": {"type": "sqlite", "sqlite_db": "signal.db"},
+            }
+        )
+
+        # Initialize and register AI command handler
+        logger.info("Initializing AI command handler...")
+        aicommand = AICommand(ai, settings.SYSTEM_PROMPT)
+        aicommand.load()
+        bot.register(aicommand)
+
+        # Start the bot
+        logger.info("Starting Signal bot...")
         bot.start()
+
     except KeyboardInterrupt:
-        aicommand.save()
+        logger.info("Shutting down gracefully (KeyboardInterrupt)")
     except Exception as e:
-        print(f"Error: {e}")
-        aicommand.save()
+        logger.error(f"Fatal error: {e}", exc_info=True)
     finally:
-        aicommand.save()
+        # Ensure history is saved on shutdown
+        if "aicommand" in locals():
+            aicommand.save()
+            logger.info("Saved conversation history on shutdown")
+
 
 if __name__ == "__main__":
     main()
