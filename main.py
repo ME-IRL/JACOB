@@ -41,8 +41,11 @@ class AICommand(Command):
         await c.send(resp)
 
     def load(self):
-        with open("history.pkl", "wb") as f:
-            self.history = pickle.load(f)
+        try:
+            with open("history.pkl", "rb") as f:
+                self.history = pickle.load(f)
+        except FileNotFoundError:
+            print("File does not exist")
 
     def save(self):
         with open("history.pkl", "wb") as f:
