@@ -69,9 +69,16 @@ def main():
     aicommand.load()
 
     bot.register(aicommand)
-    bot.start()
-    bot.scheduler.start()
-    aicommand.save()
+
+    try:
+        bot.start()
+    except KeyboardInterrupt:
+        aicommand.save()
+    except Exception as e:
+        print(f"Error: {e}")
+        aicommand.save()
+    finally:
+        aicommand.save()
 
 if __name__ == "__main__":
     main()
