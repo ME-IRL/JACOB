@@ -5,7 +5,7 @@ from typing import Dict
 from langchain_core.messages import BaseMessage, SystemMessage
 from signalbot import Command, Context, SignalBot
 
-from assistant import MultiAssistant, get_time
+from assistant import MultiAssistant
 from config import get_settings
 from tool_search import get_search_results
 
@@ -98,7 +98,7 @@ def main() -> None:
         # Initialize AI assistant
         logger.info("Initializing AI assistant...")
         ai = MultiAssistant(settings.OPENAI_API_BASE, settings.OPENAI_API_KEY)
-        ai.add_tool(get_time)
+        # ai.add_tool(get_time)
         ai.add_tool(get_search_results)
 
         # Initialize Signal bot

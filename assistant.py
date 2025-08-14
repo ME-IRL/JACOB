@@ -10,6 +10,9 @@ from pydantic import SecretStr
 logger = logging.getLogger(__name__)
 
 
+def get_time_raw() -> str:
+    return datetime.now().strftime("%m/%d/%Y %I:%M:%S %p")
+
 class MultiAssistant:
     """Multi-user assistant for handling AI conversations with tool integration."""
 
@@ -46,7 +49,7 @@ class MultiAssistant:
             AI response
         """
         try:
-            history.append(HumanMessage(msg))
+            history.append(HumanMessage(f"<time>{get_time_raw()}</time> {msg}"))
             resp = self.llm.invoke(history)
             history.append(resp)
 
