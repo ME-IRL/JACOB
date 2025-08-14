@@ -61,7 +61,7 @@ class MultiAssistant:
                                 tool_result = rtool.invoke(tool_call)
                                 history.append(tool_result)
                                 tool_found = True
-                                logger.info(f"Executed tool: {rtool.name}")
+                                logger.info(f"Executed tool: {rtool.name}({tool_call['args']})")
                                 break
                         if not tool_found:
                             logger.warning(f"Tool not found: {tool_call['name']}")
