@@ -2,7 +2,10 @@ import logging
 import pickle
 from typing import Dict
 
+import meshtastic
+import meshtastic.serial_interface
 from langchain_core.messages import BaseMessage, SystemMessage
+from pubsub import pub
 from signalbot import Command, Context, SignalBot
 
 from assistant import MultiAssistant
@@ -35,6 +38,7 @@ class AICommand(Command):
         self.ai = ai
         self.prompt = prompt
         self.history: Dict[str, list[BaseMessage]] = {}
+        self.logger = logging.getLogger("SignalCommand")
 
     async def handle(self, c: Context) -> None:
         """Handle incoming Signal messages.
@@ -51,7 +55,7 @@ class AICommand(Command):
                 logger.debug(f"Skipping group message from {id}")
                 return
 
-            logger.info(f"Received message from {id}: {msg}")
+            self.logger.info(f"Received message from {id}: {msg}")
 
             await c.start_typing()
 
@@ -65,31 +69,109 @@ class AICommand(Command):
 
             # Send response and log
             await c.send(resp)
-            logger.info(f"Sent response to {id}")
+            self.logger.info(f"Sent response to {id}")
 
         except Exception as e:
-            logger.error(f"Error handling message from {id}: {e}", exc_info=True)
+            self.logger.error(f"Error handling message from {id}: {e}", exc_info=True)
             await c.send("I'm sorry, I encountered an error processing your request.")
 
-    def load(self) -> None:
+    def load(self, filename: str) -> None:
         """Load conversation history from persistent storage."""
         try:
-            with open("history.pkl", "rb") as f:
+            with open(f"{filename}.pkl", "rb") as f:
                 self.history = pickle.load(f)
-            logger.info("Loaded conversation history")
+            self.logger.info("Loaded conversation history")
         except FileNotFoundError:
-            logger.warning("History file not found, starting with empty history")
+            self.logger.warning("History file not found, starting with empty history")
         except Exception as e:
-            logger.error(f"Error loading history: {e}", exc_info=True)
+            self.logger.error(f"Error loading history: {e}", exc_info=True)
 
-    def save(self) -> None:
+    def save(self, filename: str) -> None:
         """Save conversation history to persistent storage."""
         try:
-            with open("history.pkl", "wb") as f:
+            with open(f"{filename}.pkl", "wb") as f:
                 pickle.dump(self.history, f)
-            logger.info("Saved conversation history")
+            self.logger.info("Saved conversation history")
         except Exception as e:
-            logger.error(f"Error saving history: {e}", exc_info=True)
+            self.logger.error(f"Error saving history: {e}", exc_info=True)
+
+
+class MeshBot:
+    """
+    Class to handle village chatbot
+    """
+
+    def __init__(self, serial_port: str, ai: MultiAssistant, prompt: str):
+        # set up meshtastic threads, note only responding to text messages
+        pub.subscribe(self.onReceive, "meshtastic.receive.text")
+        pub.subscribe(self.onConnection, "meshtastic.connection.established")
+
+        # The mestastic interface we will use for comms
+        self.interface = meshtastic.serial_interface.SerialInterface(serial_port)
+        self.ai = ai
+        self.prompt = prompt
+        self.history: Dict[str, list[BaseMessage]] = {}
+        self.logger = logging.getLogger("Mesh")
+
+    def load(self, filename: str) -> None:
+        """Load conversation history from persistent storage."""
+        try:
+            with open(f"{filename}.pkl", "rb") as f:
+                self.history = pickle.load(f)
+            self.logger.info("Loaded conversation history")
+        except FileNotFoundError:
+            self.logger.warning("History file not found, starting with empty history")
+        except Exception as e:
+            self.logger.error(f"Error loading history: {e}", exc_info=True)
+
+    def save(self, filename: str) -> None:
+        """Save conversation history to persistent storage."""
+        try:
+            with open(f"{filename}.pkl", "wb") as f:
+                pickle.dump(self.history, f)
+            self.logger.info("Saved conversation history")
+        except Exception as e:
+            self.logger.error(f"Error saving history: {e}", exc_info=True)
+
+    def onReceive(self, packet, interface):
+        """
+        Handles reciving and responding to messages
+
+        Args:
+            packet (_type_): _description_
+            interface (_type_): _description_
+        """
+
+        self.logger.info(f'Got Message from {packet["fromId"]}: {packet["decoded"]["text"]}')
+
+        if "channel" in packet or packet["toId"] == "^all":
+            self.logger.info("Broadcast message -- ignored")
+            # TODO: Decide if we want to let the bot interact with channel messages too
+        else:  # Message was a direct message
+            msg = packet["decoded"]["text"].strip()
+            id = packet["fromId"]
+
+            # Initialize conversation history if not exists
+            if id not in self.history:
+                self.history[id] = [SystemMessage(self.prompt)]
+
+            # Get AI response
+            resp = self.ai.chat(msg, self.history[id])
+
+            # Send response and log
+            self.interface.sendText(resp, destinationId=packet["from"])
+            logger.info(f"Sent response to {id}")
+
+    def onConnection(self, interface, topic=pub.AUTO_TOPIC):
+        """
+        Called when connection or reconnecting
+
+        Args:
+            interface (obj):The meshtastic interface object
+            topic (_type_, optional): _description_. Defaults to pub.AUTO_TOPIC.
+        """
+
+        self.logger.info("Connected to device")
 
 
 def main() -> None:
@@ -114,8 +196,15 @@ def main() -> None:
         # Initialize and register AI command handler
         logger.info("Initializing AI command handler...")
         aicommand = AICommand(ai, settings.SYSTEM_PROMPT)
-        aicommand.load()
+        aicommand.load("signal")
         bot.register(aicommand)
+
+        mesh = MeshBot(
+            settings.MESH_SERIAL_PORT,
+            ai,
+            settings.SYSTEM_PROMPT + settings.MESH_ADDITIONAL_PROMPT,
+        )
+        mesh.load("mesh")
 
         # Start the bot
         logger.info("Starting Signal bot...")
@@ -127,9 +216,12 @@ def main() -> None:
         logger.error(f"Fatal error: {e}", exc_info=True)
     finally:
         # Ensure history is saved on shutdown
+        if "mesh" in locals():
+            mesh.save("mesh")
+            logger.info("Saved meshtastic conversation history on shutdown")
         if "aicommand" in locals():
-            aicommand.save()
-            logger.info("Saved conversation history on shutdown")
+            aicommand.save("signal")
+            logger.info("Saved signal conversation history on shutdown")
 
 
 if __name__ == "__main__":

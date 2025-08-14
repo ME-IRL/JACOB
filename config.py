@@ -21,6 +21,13 @@ class Settings(BaseSettings):
         env="SYSTEM_PROMPT",
     )
 
+    MESH_ADDITIONAL_PROMPT: str = Field(
+        "Keep your messages short and concise. Do not use more than 200 characters and avoid any complex formatting or instructions. Do not respond in any way other than text and emojis.",
+        env="MESH_ADDITIONAL_PROMPT",
+    )
+
+    MESH_SERIAL_PORT: str = Field("/dev/ttyACM0", env="MESH_SERIAL_PORT")
+
     # Database Configuration
     DATABASE_URL: str = Field("sqlite:///signal.db", env="DATABASE_URL")
 

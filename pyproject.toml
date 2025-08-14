@@ -26,6 +26,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydantic-settings>=2.10.1",
     "ddgs>=9.5.2",
+    "meshtastic>=2.3.11",
 ]
 
 [project.optional-dependencies]

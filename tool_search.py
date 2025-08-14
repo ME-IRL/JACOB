@@ -1,20 +1,24 @@
-from langchain_core.tools import tool
+from typing import Dict, List
+
 from ddgs import DDGS
+from langchain_core.tools import tool
 
 ddgsearch = DDGS()
 
-def search_internet(query: str, max_results: int = 5):
+
+def search_internet(query: str, max_results: int = 5) -> List[Dict[str, str]]:
     try:
         results = ddgsearch.text(query, max_results=max_results)
         # Filter out irrelevant results
-        filtered_results = [result for result in results if 'body' in result]
+        filtered_results = [result for result in results if "body" in result]
         return filtered_results
     except Exception as e:
         print(f"Error searching internet: {e}")
         return []
 
+
 @tool(parse_docstring=True)
-def get_search_results(query: str, max_results: int = 5):
+def get_search_results(query: str, max_results: int = 5) -> str:
     """Perform a search on DuckDuckGo and return formatted results.
 
     This function uses the DDGS (DuckDuckGo Search) library to perform
@@ -23,7 +27,7 @@ def get_search_results(query: str, max_results: int = 5):
     Args:
         query (str): The search query to perform on DuckDuckGo.
         max_results (int, optional): The maximum number of search results to return.
-            Defaults to 5.
+            Defaults to 5, capped to 20.
 
     Returns:
         str: A formatted string containing search results. Each result includes:
@@ -58,6 +62,7 @@ def get_search_results(query: str, max_results: int = 5):
         Snippet: Learn Python programming with free online courses, tutorials, and books...
         '
     """
+    max_results = min(max_results, 20)
     search_results = search_internet(query, max_results)
     output = ""
     for result in search_results:
