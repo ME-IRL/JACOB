@@ -1,26 +1,34 @@
 import logging
 import pickle
 import json
-from typing import Dict
+from typing import Any, Dict
 
 import meshtastic
 import meshtastic.serial_interface
 from langchain_core.messages import BaseMessage, SystemMessage
 from pubsub import pub
-from signalbot import Command, Context, SignalBot
+from signalbot import Command, Context, SignalBot, Message
 
 from assistant import MultiAssistant
 from config import get_settings
 from tool_search import get_search_results
 
 # Configure logging
-logging.getLogger().setLevel(logging.ERROR)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)24s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("jacob.log"), logging.StreamHandler()],
-)
-logger = logging.getLogger(__name__)
+_log_formatter = logging.Formatter("%(asctime)s - %(name)24s - %(levelname)s - %(message)s")
+_fh = logging.FileHandler("jacob.log")
+_fh.setFormatter(_log_formatter)
+_sh = logging.StreamHandler()
+_sh.setFormatter(_log_formatter)
+
+def getLogger(name: str) -> logging.Logger:
+    l = logging.getLogger(name)
+    if not l.handlers:
+        l.setLevel(logging.INFO)
+        l.addHandler(_fh)
+        l.addHandler(_sh)
+        l.propagate = False
+    return l
+
 
 # Load configuration
 settings = get_settings()
@@ -40,14 +48,37 @@ class AICommand(Command):
         self.ai = ai
         self.prompt = prompt
         self.history: Dict[str, list[BaseMessage]] = {}
-        self.logger = logging.getLogger("SignalCommand")
-        # self.logger.setLevel(logging.INFO)
+        self.logger = getLogger("SignalCommand")
+
+    def getGroupName(self, raw: Any) -> str:
+        env = raw["envelope"]
+
+        if "dataMessage" in env and env["dataMessage"]:
+            x = env["dataMessage"]
+            if "groupInfo" in x and x["groupInfo"]:
+                x = x["groupInfo"]
+                if "groupName" in x and x["groupName"]:
+                    return x["groupName"]
+        return "[UNKNOWN GROUP NAME]"
+
+    def getName(self, raw: Any) -> str:
+        env = raw["envelope"]
+
+        if "sourceName" in env and env["sourceName"]:
+            return env["sourceName"]
+
+        if "sourceNumber" in env and env["sourceNumber"]:
+            return env["sourceNumber"]
+
+        return env["sourceUuid"]
 
     async def handleDirect(self, c: Context) -> None:
         msg = c.message.text
         id = c.message.source_uuid
+        raw = json.loads(c.message.raw_message)
 
-        self.logger.info(f"Received message from {id}: {msg}")
+        name = self.getName(raw)
+        self.logger.info(f"From \'{name}\': {msg}")
 
         await c.start_typing()
 
@@ -55,41 +86,111 @@ class AICommand(Command):
         if id not in self.history:
             self.history[id] = [SystemMessage(self.prompt)]
 
+        match msg.strip().split():
+            case ["!clear", *_]:
+                prompt = self.history[id][0].content
+                self.history[id] = [SystemMessage(prompt)]
+                await c.send("Context cleared!")
+                return
+            case ["!info", *_] | ["!help", *_]:
+                await c.send("<Insert help here>")
+                return
+            case ["!system"]:
+                prompt = self.history[id][0].content
+                await c.send(f"The current system prompt is as follows:\n\n{prompt}")
+                return
+            case ["!system", *prompt]:
+                self.history[id] = [SystemMessage(self.prompt + "\n\n" + ' '.join(prompt))]
+                await c.send("System prompt set and context cleared!")
+                return
+
         # Get AI response
         resp = self.ai.chat(msg, self.history[id])
         await c.stop_typing()
 
         # Send response and log
         await c.send(resp)
-        self.logger.info(f"Sent response to {id}")
+        if len(resp) > 10:
+            resp = resp[:80] + "..."
+        self.logger.info(f"To   \'{name}\': {resp}")
 
     async def handleGroup(self, c: Context) -> None:
         msg = c.message.text
         id = c.message.group
+        raw = json.loads(c.message.raw_message)
 
-        mentioned = None
+        name = self.getName(raw)
+        groupName = self.getGroupName(raw)
+
+        mentioned = False
+        # counter = 0
         for mention in c.message.mentions:
             if mention["uuid"] == "bf7d2593-ebcd-4a5d-97bd-411ef43096fd":
-                mentioned = mention
-                break
-        if mentioned is None:
+                mentioned = True
+                name2 = "J.A.C.O.B."
 
+                m1 = msg[:mention['start']]
+                m2 = msg[mention['start']+mention['length']:]
+                msg = f"{m1} {name2} {m2}"
+                break
+            # else:
+            #     name2 = f"NAME{counter}"
+            #     counter += 1
+            # m1 = msg[:mention['start']]
+            # m2 = msg[mention['start']+mention['length']:]
+            # msg = f"{m1} {name2} {m2}"
+
+        self.logger.info(f"From \'{name}\' in group \'{groupName}\': {msg}")
+
+        if not mentioned:
             # Check reply
             raw = json.loads(c.message.raw_message)
             dataMessage = raw['envelope']['dataMessage']
             if 'quote' in dataMessage:
                 if dataMessage['quote']['authorUuid'] != "bf7d2593-ebcd-4a5d-97bd-411ef43096fd":
-                    logger.debug(f"Skipping group message from {id}")
+                    self.logger.info("-- Ignoring message")
                     return
             else:
-                logger.debug(f"Skipping group message from {id}")
+                self.logger.info("-- Ignoring message")
                 return
-        else:
-            # Replace mention with name
-            m1 = msg[:mentioned['start']]
-            m2 = msg[mentioned['start']+mentioned['length']:]
-            msg = m1 + " J.A.C.O.B. " + m2
-            logger.info(msg)
+
+        # Initialize conversation history if not exists
+        if id not in self.history:
+            self.history[id] = [SystemMessage(self.prompt)]
+
+        x = msg.strip().split()
+        if mentioned:
+            x = x[1:]
+        match x:
+            case ["!clear", *_]:
+                prompt = self.history[id][0].content
+                self.history[id] = [SystemMessage(prompt)]
+                await c.reply("Context cleared!")
+                return
+            case ["!source"]:
+                await c.reply("See my source code at: https://github.com/ME-IRL/JACOB")
+                return
+            case ["!info", *_] | ["!help", *_]:
+                await c.reply("<Insert help here>")
+                return
+            case ["!system"]:
+                prompt = self.history[id][0].content
+                await c.reply(f"The current system prompt is as follows:\n\n{prompt}")
+                return
+            case ["!system", *prompt]:
+                self.history[id] = [SystemMessage(self.prompt + "\n\n" + ' '.join(prompt))]
+                await c.reply("System prompt set and context cleared!")
+                return
+
+        # Get AI response
+        resp = self.ai.chat(msg, self.history[id])
+        await c.stop_typing()
+
+        # Send response and log
+        await c.reply(resp)
+        if len(resp) > 10:
+            resp = resp[:80] + "..."
+        self.logger.info(f"To   \'{name}\' in group \'{groupName}\': {resp}")
 
     async def handle(self, c: Context) -> None:
         """Handle incoming Signal messages.
@@ -98,8 +199,6 @@ class AICommand(Command):
             c: Signal context containing message information
         """
         try:
-            self.logger.info(c.message.raw_message)
-
             msg = c.message.text
             id = c.message.source_uuid
 
@@ -107,7 +206,7 @@ class AICommand(Command):
                 return
 
             # Handle group messages
-            if c.message.group:
+            if c.message.is_group():
                 await self.handleGroup(c)
             else:
                 await self.handleDirect(c)
@@ -138,8 +237,8 @@ class AICommand(Command):
             with open(f"{filename}.pkl", "rb") as f:
                 self.history = pickle.load(f)
             self.logger.info("Loaded conversation history")
-            for user in self.history:
-                self.history[user][0] = SystemMessage(self.prompt)
+            # for user in self.history:
+            #     self.history[user][0] = SystemMessage(self.prompt)
         except FileNotFoundError:
             self.logger.warning("History file not found, starting with empty history")
         except Exception as e:
@@ -237,6 +336,7 @@ class MeshBot:
 
 def main() -> None:
     """Main entry point for the Signal bot application."""
+    logger = getLogger("main")
     try:
         # Initialize AI assistant
         logger.info("Initializing AI assistant...")
@@ -272,8 +372,10 @@ def main() -> None:
         bot.start()
 
     except KeyboardInterrupt:
+        print()
         logger.info("Shutting down gracefully (KeyboardInterrupt)")
     except Exception as e:
+        print()
         logger.error(f"Fatal error: {e}", exc_info=True)
     finally:
         # Ensure history is saved on shutdown
