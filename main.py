@@ -1,5 +1,6 @@
 import logging
 import pickle
+import json
 from typing import Dict
 
 import meshtastic
@@ -52,7 +53,33 @@ class AICommand(Command):
 
             # Skip group messages
             if c.message.group:
-                logger.debug(f"Skipping group message from {id}")
+                id = c.message.group
+
+                mentioned = None
+                for mention in c.message.mentions:
+                    if mention["uuid"] == "bf7d2593-ebcd-4a5d-97bd-411ef43096fd":
+                        mentioned = mention
+                        break
+                if mentioned is None:
+
+                    # Check reply
+                    raw = json.loads(c.message.raw_message)
+                    dataMessage = raw['envelope']['dataMessage']
+                    if 'quote' in dataMessage:
+                        if dataMessage['quote']['authorUuid'] != "bf7d2593-ebcd-4a5d-97bd-411ef43096fd":
+                            logger.debug(f"Skipping group message from {id}")
+                            return
+                    else:
+                        logger.debug(f"Skipping group message from {id}")
+                        return
+                else:
+                    # Replace mention with name
+                    m1 = msg[:mentioned['start']]
+                    m2 = msg[mentioned['start']+mentioned['length']:]
+                    msg = m1 + " J.A.C.O.B. " + m2
+                    logger.info(msg)
+
+            if not msg:
                 return
 
             self.logger.info(f"Received message from {id}: {msg}")
@@ -81,6 +108,8 @@ class AICommand(Command):
             with open(f"{filename}.pkl", "rb") as f:
                 self.history = pickle.load(f)
             self.logger.info("Loaded conversation history")
+            for user in self.history:
+                self.history[user][0] = SystemMessage(self.prompt)
         except FileNotFoundError:
             self.logger.warning("History file not found, starting with empty history")
         except Exception as e:
@@ -119,6 +148,8 @@ class MeshBot:
             with open(f"{filename}.pkl", "rb") as f:
                 self.history = pickle.load(f)
             self.logger.info("Loaded conversation history")
+            for user in self.history:
+                self.history[user][0] = SystemMessage(self.prompt)
         except FileNotFoundError:
             self.logger.warning("History file not found, starting with empty history")
         except Exception as e:
