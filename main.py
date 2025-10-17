@@ -14,6 +14,7 @@ from config import get_settings
 from tool_search import get_search_results
 
 # Configure logging
+logging.getLogger().setLevel(logging.ERROR)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)24s - %(levelname)s - %(message)s",
@@ -40,6 +41,55 @@ class AICommand(Command):
         self.prompt = prompt
         self.history: Dict[str, list[BaseMessage]] = {}
         self.logger = logging.getLogger("SignalCommand")
+        # self.logger.setLevel(logging.INFO)
+
+    async def handleDirect(self, c: Context) -> None:
+        msg = c.message.text
+        id = c.message.source_uuid
+
+        self.logger.info(f"Received message from {id}: {msg}")
+
+        await c.start_typing()
+
+        # Initialize conversation history if not exists
+        if id not in self.history:
+            self.history[id] = [SystemMessage(self.prompt)]
+
+        # Get AI response
+        resp = self.ai.chat(msg, self.history[id])
+        await c.stop_typing()
+
+        # Send response and log
+        await c.send(resp)
+        self.logger.info(f"Sent response to {id}")
+
+    async def handleGroup(self, c: Context) -> None:
+        msg = c.message.text
+        id = c.message.group
+
+        mentioned = None
+        for mention in c.message.mentions:
+            if mention["uuid"] == "bf7d2593-ebcd-4a5d-97bd-411ef43096fd":
+                mentioned = mention
+                break
+        if mentioned is None:
+
+            # Check reply
+            raw = json.loads(c.message.raw_message)
+            dataMessage = raw['envelope']['dataMessage']
+            if 'quote' in dataMessage:
+                if dataMessage['quote']['authorUuid'] != "bf7d2593-ebcd-4a5d-97bd-411ef43096fd":
+                    logger.debug(f"Skipping group message from {id}")
+                    return
+            else:
+                logger.debug(f"Skipping group message from {id}")
+                return
+        else:
+            # Replace mention with name
+            m1 = msg[:mentioned['start']]
+            m2 = msg[mentioned['start']+mentioned['length']:]
+            msg = m1 + " J.A.C.O.B. " + m2
+            logger.info(msg)
 
     async def handle(self, c: Context) -> None:
         """Handle incoming Signal messages.
@@ -48,55 +98,35 @@ class AICommand(Command):
             c: Signal context containing message information
         """
         try:
+            self.logger.info(c.message.raw_message)
+
             msg = c.message.text
             id = c.message.source_uuid
-
-            # Skip group messages
-            if c.message.group:
-                id = c.message.group
-
-                mentioned = None
-                for mention in c.message.mentions:
-                    if mention["uuid"] == "bf7d2593-ebcd-4a5d-97bd-411ef43096fd":
-                        mentioned = mention
-                        break
-                if mentioned is None:
-
-                    # Check reply
-                    raw = json.loads(c.message.raw_message)
-                    dataMessage = raw['envelope']['dataMessage']
-                    if 'quote' in dataMessage:
-                        if dataMessage['quote']['authorUuid'] != "bf7d2593-ebcd-4a5d-97bd-411ef43096fd":
-                            logger.debug(f"Skipping group message from {id}")
-                            return
-                    else:
-                        logger.debug(f"Skipping group message from {id}")
-                        return
-                else:
-                    # Replace mention with name
-                    m1 = msg[:mentioned['start']]
-                    m2 = msg[mentioned['start']+mentioned['length']:]
-                    msg = m1 + " J.A.C.O.B. " + m2
-                    logger.info(msg)
 
             if not msg:
                 return
 
-            self.logger.info(f"Received message from {id}: {msg}")
+            # Handle group messages
+            if c.message.group:
+                await self.handleGroup(c)
+            else:
+                await self.handleDirect(c)
 
-            await c.start_typing()
+            # self.logger.info(f"Received message from {id}: {msg}")
 
-            # Initialize conversation history if not exists
-            if id not in self.history:
-                self.history[id] = [SystemMessage(self.prompt)]
+            # await c.start_typing()
 
-            # Get AI response
-            resp = self.ai.chat(msg, self.history[id])
-            await c.stop_typing()
+            # # Initialize conversation history if not exists
+            # if id not in self.history:
+            #     self.history[id] = [SystemMessage(self.prompt)]
 
-            # Send response and log
-            await c.send(resp)
-            self.logger.info(f"Sent response to {id}")
+            # # Get AI response
+            # resp = self.ai.chat(msg, self.history[id])
+            # await c.stop_typing()
+
+            # # Send response and log
+            # await c.send(resp)
+            # self.logger.info(f"Sent response to {id}")
 
         except Exception as e:
             self.logger.error(f"Error handling message from {id}: {e}", exc_info=True)
@@ -230,12 +260,12 @@ def main() -> None:
         aicommand.load("signal")
         bot.register(aicommand)
 
-        mesh = MeshBot(
-            settings.MESH_SERIAL_PORT,
-            ai,
-            settings.SYSTEM_PROMPT + settings.MESH_ADDITIONAL_PROMPT,
-        )
-        mesh.load("mesh")
+        # mesh = MeshBot(
+        #     settings.MESH_SERIAL_PORT,
+        #     ai,
+        #     settings.SYSTEM_PROMPT + settings.MESH_ADDITIONAL_PROMPT,
+        # )
+        # mesh.load("mesh")
 
         # Start the bot
         logger.info("Starting Signal bot...")
